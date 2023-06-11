@@ -24,7 +24,7 @@ class continuousPolicyNet(torch.nn.Module):
         x = F.relu(self.state_layer(x))
         for i in range(self.hidden_layer_num):
             x = F.relu(getattr(self, 'hidden_layer{}'.format(i+1))(x))
-        mu = F.relu(self.layer_mu(x))
+        mu = self.layer_mu(x)
         std = F.softplus(self.layer_std(x))
         dist = Normal(mu, std)
         normal_sample = dist.rsample()
