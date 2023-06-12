@@ -8,6 +8,14 @@ import gymnasium as gym
 import matplotlib.pyplot as plt
 import replay_buffer as rb
 
+min_std = -20
+max_std = 2
+
+def weight_init(m):
+    if isinstance(m, nn.Linear):
+        torch.nn.init.xavier_uniform_(m.weight, gain=1)
+        torch.nn.init.constant_(m.bias, 0)
+
 # policy & value net structure for continuous SAC
 class continuousPolicyNet(torch.nn.Module):
     def __init__(self, state_dim, hidden_dim, action_dim, action_bound, hidden_layer_num=2) -> None:
@@ -19,13 +27,17 @@ class continuousPolicyNet(torch.nn.Module):
         self.layer_mu = nn.Linear(hidden_dim, action_dim)
         self.layer_std = nn.Linear(hidden_dim, action_dim)
         self.action_bound = action_bound
-        
+        self.apply(weight_init)
+
     def forward(self, x):
         x = F.relu(self.state_layer(x))
         for i in range(self.hidden_layer_num):
             x = F.relu(getattr(self, 'hidden_layer{}'.format(i+1))(x))
         mu = self.layer_mu(x)
-        std = F.softplus(self.layer_std(x))
+        #std = F.softplus(self.layer_std(x))
+        std = self.layer_std(x)
+        std = torch.clamp(std, min=min_std, max=max_std)
+        std = std.exp()
         dist = Normal(mu, std)
         normal_sample = dist.rsample()
         log_prob = dist.log_prob(normal_sample)
@@ -33,6 +45,7 @@ class continuousPolicyNet(torch.nn.Module):
         # compute log_prob according to the action
         log_prob -= torch.log(1 - action.pow(2) + 1e-7)
         action = action * self.action_bound
+        log_prob = log_prob.sum(1, keepdim=True)
         return action, log_prob
     
 class continuousValueNet(torch.nn.Module):
@@ -43,6 +56,7 @@ class continuousValueNet(torch.nn.Module):
         for i in range(hidden_layer_num):
             setattr(self, 'hidden_layer{}'.format(i+1), nn.Linear(hidden_dim, hidden_dim))
         self.action_layer = nn.Linear(hidden_dim, 1)
+        self.apply(weight_init)
         
     def forward(self, x, a):
         x = torch.cat([x, a], dim=1)
@@ -95,7 +109,8 @@ class SACContinuous:
         entropy = -torch.prod(log_prob, dim=1, keepdim=True)
         q1 = self.target_critic1(next_states, next_actions)
         q2 = self.target_critic2(next_states, next_actions)
-        next_q = torch.min(q1, q2) + self.log_alpha.exp() * entropy
+        #next_q = torch.min(q1, q2) + self.log_alpha.exp() * entropy
+        next_q = torch.min(q1, q2) - self.log_alpha.exp() * log_prob
         td_target = rewards + self.gamma * (1 - dones) * (1 - truncateds) * next_q
         return td_target        
             
@@ -122,14 +137,12 @@ class SACContinuous:
         truncateds = truncateds.clone().detach().reshape(batch_size, 1)
         
         # modify the shape of reward
-        rewards = (rewards + 8.0) / 8.0
+        #rewards = (rewards + 8.0) / 8.0
         
         td_target = self.cal_target(rewards, next_states, dones, truncateds)
         critic1_loss = self.weighted_mse_loss(self.critic1(states, actions), td_target.detach(), weight)
         critic2_loss = self.weighted_mse_loss(self.critic2(states, actions), td_target.detach(), weight)
-        '''critic1_loss = torch.mean(F.mse_loss(self.critic1(states, actions), td_target.detach()))
-        critic2_loss = torch.mean(F.mse_loss(self.critic2(states, actions), td_target.detach()))
-        '''
+
         if isinstance(self.replay_buffer, rb.PrioritizedReplayBuffer):
             self.replay_buffer.update_priorities(idxs, td_target.detach().cpu().numpy())
         

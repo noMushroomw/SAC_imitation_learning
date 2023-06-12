@@ -5,6 +5,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
 
+def weight_init(m):
+    if isinstance(m, nn.Linear):
+        torch.nn.init.xavier_uniform_(m.weight, gain=1)
+        torch.nn.init.constant_(m.bias, 0)
 
 # policy & value net structure for continuous SAC
 class continuousPolicyNet(torch.nn.Module):
@@ -16,6 +20,7 @@ class continuousPolicyNet(torch.nn.Module):
             setattr(self, 'hidden_layer{}'.format(i+1), nn.Linear(hidden_dim, hidden_dim))
         self.layer_mu = nn.Linear(hidden_dim, action_dim)
         self.layer_std = nn.Linear(hidden_dim, action_dim)
+        self.apply(weight_init)
         
     def forward(self, x):
         x = F.relu(self.state_layer(x))
@@ -29,13 +34,13 @@ class continuousValueNet(torch.nn.Module):
     def __init__(self, state_dim, hidden_dim, action_dim, hidden_layer_num=2) -> None:
         super(continuousValueNet, self).__init__()
         self.hidden_layer_num = hidden_layer_num
-        self.state_layer = nn.Linear(state_dim + action_dim, hidden_dim)
+        self.state_layer = nn.Linear(state_dim, hidden_dim)
         for i in range(hidden_layer_num):
             setattr(self, 'hidden_layer{}'.format(i+1), nn.Linear(hidden_dim, hidden_dim))
         self.action_layer = nn.Linear(hidden_dim, 1)
+        self.apply(weight_init)
         
-    def forward(self, x, a):
-        x = torch.cat([x, a], dim=1)
+    def forward(self, x):
         x = F.relu(self.state_layer(x))
         for i in range(self.hidden_layer_num):
             x = F.relu(getattr(self, 'hidden_layer{}'.format(i+1))(x))
@@ -69,7 +74,7 @@ class PPOContinuous:
         return action.flatten().tolist()   
     
     # compute advantage
-    def compute_advantage(gamma, lmbda, td_delta):
+    def compute_advantage(self, gamma, lmbda, td_delta):
         td_delta = td_delta.detach().numpy()
         advantage_list = []
         advantage = 0.0
@@ -81,21 +86,26 @@ class PPOContinuous:
 
     
     def update(self, transitions):                
-        states, actions, rewards, next_states, dones, truncateds = transitions
+        states = transitions['states']
+        actions = transitions['actions']
+        rewards = transitions['rewards']
+        next_states = transitions['next_states']
+        dones = transitions['dones']
+        truncateds = transitions['truncateds']
         
-        states = states.clone().detach().to(self.device)
-        actions = actions.clone().detach().to(self.device)
-        rewards = rewards.clone().detach().to(self.device)
-        next_states = next_states.clone().detach().to(self.device)
-        dones = dones.clone().detach().to(self.device)
-        truncateds = truncateds.clone().detach().to(self.device)
+        states = torch.tensor(states, dtype=torch.float32).to(self.device)
+        actions = torch.tensor(actions, dtype=torch.float32).to(self.device)
+        rewards = torch.tensor(rewards, dtype=torch.float32).view(-1,1).to(self.device)
+        next_states = torch.tensor(next_states, dtype=torch.float32).to(self.device)
+        dones = torch.tensor(dones, dtype=torch.int32).view(-1,1).to(self.device)
+        truncateds = torch.tensor(truncateds, dtype=torch.int32).view(-1,1).to(self.device)
         
         # modify the shape of reward
         rewards = (rewards + 8.0) / 8.0
         
-        td_target = rewards + self.gamma * (1 - dones) * (1 - truncateds) *self.critic(next_states, self.actor(next_states))
-        td_delta = td_target - self.critic(states, actions)
-        advantage = self.compute_advantage(self.gamma, self.lmbda, td_delta.cpu().to(self.device))
+        td_target = rewards + self.gamma * (1 - dones) * (1 - truncateds) *self.critic(next_states)
+        td_delta = td_target - self.critic(states)
+        advantage = self.compute_advantage(self.gamma, self.lmbda, td_delta.cpu()).to(self.device)
         
         mu, std = self.actor(states)
         action_dist = torch.distributions.Normal(mu.detach(), std.detach())
@@ -109,7 +119,7 @@ class PPOContinuous:
             surr1 = ratio * advantage
             surr2 = torch.clamp(ratio, 1-self.eps, 1+self.eps) * advantage
             actor_loss = -torch.min(surr1, surr2).mean()
-            critic_loss = F.smooth_l1_loss(self.critic(states, actions), td_target.detach())
+            critic_loss = F.smooth_l1_loss(self.critic(states), td_target.detach())
             
             self.actor_optimizer.zero_grad()
             self.critic_optimizer.zero_grad()
