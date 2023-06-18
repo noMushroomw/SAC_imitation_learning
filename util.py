@@ -68,8 +68,8 @@ def train_off_policy_agent(env, agent, num_episodes, minimal_size, batch_size):
                 pbar.update(1)
     return return_list
 
-# generate expert data
-def generate_expert_data(env, agent, num_episodes, threshold):
+# sample expert data
+def sample_expert_data(env, agent, num_episodes, threshold):
     states, actions = [], []
     episode = 0
     while episode < num_episodes:

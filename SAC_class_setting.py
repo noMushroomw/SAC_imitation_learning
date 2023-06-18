@@ -99,11 +99,16 @@ class SACContinuous:
         
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
+        
+        self.actor_scheduler = torch.optim.lr_scheduler.StepLR(self.actor_optimizer, step_size=10000, gamma=0.9)
+        self.critic_scheduler = torch.optim.lr_scheduler.StepLR(self.critic_optimizer, step_size=10000, gamma=0.9)
 
         # using log alpha to stablize the training process
         self.log_alpha = torch.tensor(np.log(0.01), dtype=torch.float)
         self.log_alpha.requires_grad = True
         self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_lr)
+        
+        self.log_alpha_scheduler = torch.optim.lr_scheduler.StepLR(self.log_alpha_optimizer, step_size=10000, gamma=0.9)
         
         self.target_entropy = -torch.prod(torch.Tensor(action_space.shape).to(device)).item()
         self.tau = tau
@@ -169,6 +174,8 @@ class SACContinuous:
         critic2_loss.backward()
         self.critic_optimizer.step()
         
+        self.critic_scheduler.step()
+        
         # update the actor
         new_actions, log_prob = self.actor(states)
         q1, q2 = self.critic(states, new_actions)
@@ -177,11 +184,15 @@ class SACContinuous:
         actor_loss.backward()
         self.actor_optimizer.step()
         
+        self.actor_scheduler.step()
+        
         # update the alpha
         alpha_loss = -torch.mean((log_prob + self.target_entropy).detach() * self.log_alpha.exp())
         self.log_alpha_optimizer.zero_grad()
         alpha_loss.backward()
         self.log_alpha_optimizer.step()
+        
+        self.log_alpha_scheduler.step()
         
         self.soft_update(self.critic, self.target_critic)
         
