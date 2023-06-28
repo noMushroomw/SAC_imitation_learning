@@ -43,8 +43,7 @@ def train_on_policy_agent(env, agent, num_episodes):
                 pbar.update(1)
     return return_list
 
-# train off policy agent (dqn e.g.)
-## need to be modified transdict and update
+# train off policy agent (sac e.g.)
 def train_off_policy_agent(env, agent, num_episodes, minimal_size, batch_size):
     return_list = []
     for i in range(10):
@@ -91,3 +90,6 @@ def sample_expert_data(env, agent, num_episodes, threshold):
             episode += 1
             
     return states, actions
+
+def gen_noise(scale, tensor, device):
+    return scale * torch.randn(tensor.shape).to(device)

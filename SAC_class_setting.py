@@ -7,77 +7,7 @@ from torch.distributions import Normal
 import gymnasium as gym
 import matplotlib.pyplot as plt
 import replay_buffer as rb
-
-min_std = -20
-max_std = 2
-
-def weight_init(m):
-    if isinstance(m, nn.Linear):
-        torch.nn.init.xavier_uniform_(m.weight, gain=1)
-        torch.nn.init.constant_(m.bias, 0)
-
-# Gaussian policy & value net structure for continuous SAC
-class continuousPolicyNet(torch.nn.Module):
-    def __init__(self, state_dim, hidden_dim, action_dim, hidden_layer_num=2) -> None:
-        super(continuousPolicyNet, self).__init__()
-        self.hidden_layer_num = hidden_layer_num
-        self.state_layer = nn.Linear(state_dim, hidden_dim)
-        for i in range(hidden_layer_num):
-            setattr(self, 'hidden_layer{}'.format(i+1), nn.Linear(hidden_dim, hidden_dim))
-        self.layer_mu = nn.Linear(hidden_dim, action_dim)
-        self.layer_std = nn.Linear(hidden_dim, action_dim)
-        self.apply(weight_init)
-
-    def forward(self, x):
-        x = F.relu(self.state_layer(x))
-        for i in range(self.hidden_layer_num):
-            x = F.relu(getattr(self, 'hidden_layer{}'.format(i+1))(x))
-        mu = self.layer_mu(x)
-        #std = F.softplus(self.layer_std(x))
-        log_std = self.layer_std(x).clamp(min=min_std, max=max_std)
-        std = log_std.exp()
-        dist = Normal(mu, std)
-        normal_sample = dist.rsample()
-        log_prob = dist.log_prob(normal_sample)
-        action = torch.tanh(normal_sample)
-        # compute log_prob according to the action
-        log_prob -= torch.log(1 - action.pow(2) + 1e-7)
-        log_prob = log_prob.sum(1, keepdim=True)
-        return action, log_prob
-    
-class continuousTwinValueNet(torch.nn.Module):
-    def __init__(self, state_dim, hidden_dim, action_dim, hidden_layer_num=2) -> None:
-        super(continuousTwinValueNet, self).__init__()
-        self.hidden_layer_num = hidden_layer_num
-        
-        # Q1 architecture
-        self.state_layer_1 = nn.Linear(state_dim + action_dim, hidden_dim)
-        for i in range(hidden_layer_num):
-            setattr(self, 'hidden_layer_1{}'.format(i+1), nn.Linear(hidden_dim, hidden_dim))
-        self.action_layer_1 = nn.Linear(hidden_dim, 1)
-        
-        # Q2 architecture
-        self.state_layer_2 = nn.Linear(state_dim + action_dim, hidden_dim)
-        for i in range(hidden_layer_num):
-            setattr(self, 'hidden_layer_2{}'.format(i+1), nn.Linear(hidden_dim, hidden_dim))
-        self.action_layer_2 = nn.Linear(hidden_dim, 1)
-        
-        self.apply(weight_init)
-        
-    def forward(self, x, a):
-        x = torch.cat([x, a], dim=1)
-        
-        x1 = F.relu(self.state_layer_1(x))
-        for i in range(self.hidden_layer_num):
-            x1 = F.relu(getattr(self, 'hidden_layer_1{}'.format(i+1))(x1))
-        x1 = self.action_layer_1(x1)
-        
-        x2 = F.relu(self.state_layer_2(x))
-        for i in range(self.hidden_layer_num):
-            x2 = F.relu(getattr(self, 'hidden_layer_2{}'.format(i+1))(x2))
-        x2 = self.action_layer_2(x2)
-        return x1, x2
-    
+from model import *
 
 class SACContinuous:
     def __init__(self, replay_buffer, state_dim, hidden_dim, action_dim, hidden_laryer_num, action_space,
@@ -100,6 +30,7 @@ class SACContinuous:
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
         
+        # no scheduler perfomes better
         #self.actor_scheduler = torch.optim.lr_scheduler.StepLR(self.actor_optimizer, step_size=10000, gamma=0.9)
         #self.critic_scheduler = torch.optim.lr_scheduler.StepLR(self.critic_optimizer, step_size=10000, gamma=0.9)
 
@@ -118,17 +49,19 @@ class SACContinuous:
     def rescale_action(self, action):
         return action * (self.action_range[1] - self.action_range[0]) / 2.0 + (self.action_range[1] + self.action_range[0]) / 2.0
         
-    def take_action(self, state):
+    def take_action(self, state, deterministic=False):
         state = torch.tensor([state], dtype=torch.float).to(self.device)
-        action = self.actor(state)[0].cpu().detach().numpy()
+        if deterministic:
+             action = self.actor(state)[2].cpu().detach().numpy()
+        else:
+            action = self.actor(state)[0].cpu().detach().numpy()
         action = self.rescale_action(action)
         return action.flatten().tolist()
     
     def cal_target(self, rewards, next_states, dones, truncateds):
-        next_actions, log_prob = self.actor(next_states)
+        next_actions, log_prob, _ = self.actor(next_states)
         entropy = -torch.prod(log_prob, dim=1, keepdim=True)
         q1, q2 = self.target_critic(next_states, next_actions)
-        #next_q = torch.min(q1, q2) + self.log_alpha.exp() * entropy
         next_q = torch.min(q1, q2) - self.log_alpha.exp() * log_prob
         td_target = rewards + self.gamma * (1 - dones) * (1 - truncateds) * next_q
         return td_target        
@@ -177,7 +110,7 @@ class SACContinuous:
         #self.critic_scheduler.step()
         
         # update the actor
-        new_actions, log_prob = self.actor(states)
+        new_actions, log_prob, _ = self.actor(states)
         q1, q2 = self.critic(states, new_actions)
         actor_loss = torch.mean(self.log_alpha.exp() * log_prob - torch.min(q1, q2)).mean()
         self.actor_optimizer.zero_grad()

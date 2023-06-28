@@ -11,6 +11,7 @@ def weight_init(m):
         torch.nn.init.constant_(m.bias, 0)
 
 # policy & value net structure for continuous SAC
+
 class continuousPolicyNet(torch.nn.Module):
     def __init__(self, state_dim, hidden_dim, action_dim, hidden_layer_num=2) -> None:
         super(continuousPolicyNet, self).__init__()
