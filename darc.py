@@ -3,33 +3,38 @@ import torch
 from torch import nn
 from torch.optim import Adam
 
-from model import continuousPolicyNet, continuousTwinValueNet, Classifier
+from model import *
 from replay_buffer import ReplayBuffer
 from SAC_class_setting import SAC
 from util import gen_noise
 import pickle
 
 class DARC(SAC):
-    def __init__(self, state_dim, hidden_dim, source_env, target_env, device, savefolder, running_mean,
+    '''def __init__(self, policy_config, value_config, sa_config, sas_config, source_env, target_env, device, savefolder,running_mean,
                  log_dir="latest_runs", memory_size=1e5, warmup_games=20, batch_size=64, lr=0.0001, gamma=0.99,
                  tau=0.003, alpha=0.2, ent_adj=False, delta_r_scale=1.0, s_t_ratio=10, noise_scale=1.0,
                  target_update_interval=1, n_games_til_train=1, n_updates_per_train=1,decay_rate = 0.99,max_steps = 200):
         super(DARC, self).__init__(source_env, device, log_dir, None, memory_size, None, batch_size, lr, gamma, tau,
-                                   alpha, ent_adj, target_update_interval, None, n_updates_per_train)
+                                   alpha, ent_adj, target_update_interval, None, n_updates_per_train)'''
+    def __init__(self, running_mean, replay_buffer, buffer_size, source_env, target_env, hidden_dim, hidden_laryer_num, actor_lr, critic_lr, alpha_lr, classifier_lr, tau, gamma, decay_rate, device):
+        super(DARC, self).__init__(self, replay_buffer, buffer_size, source_env, hidden_dim, hidden_laryer_num, actor_lr, critic_lr, alpha_lr, tau, gamma, device)
         self.delta_r_scale = delta_r_scale
         self.s_t_ratio = s_t_ratio
         self.noise_scale = noise_scale
 
         self.source_env = source_env
         self.target_env = target_env
+        self.state_dim = source_env.observation_space.shape[0]
+        self.action_dim = source_env.action_space.shape[0]
 
         self.warmup_games = warmup_games
         self.n_games_til_train = n_games_til_train
 
-        self.sa_classifier = Classifier(state_dim, hidden_dim, hidden_layer_num=0).to(self.device)
-        self.sa_classifier_opt = Adam(self.sa_classifier.parameters(), lr=lr)
-        self.sas_adv_classifier = Classifier(state_dim, hidden_dim, hidden_layer_num=0).to(self.device)
-        self.sas_adv_classifier_opt = Adam(self.sas_adv_classifier.parameters(), lr=lr)
+        self.sa_classifier = SA_Classifier(self.state_dim, self.action_dim, hidden_dim, hidden_layer_num=0).to(self.device)
+        self.sa_classifier_opt = Adam(self.sa_classifier.parameters(), lr=classifier_lr)
+        self.sas_adv_classifier = SAS_Classifier(self.state_dim, self.action_dim, hidden_dim, hidden_layer_num=0).to(self.device)
+        self.sas_adv_classifier_opt = Adam(self.sas_adv_classifier.parameters(), lr=classifier_lr)
+        
         self.running_mean = running_mean
         self.max_steps = max_steps
         self.savefolder = savefolder
@@ -38,6 +43,7 @@ class DARC(SAC):
         self.target_step = 0
         self.source_memory = self.memory
         self.target_memory = ReplayBuffer(self.memory_size, self.batch_size)
+        
         self.scheduler_actor = torch.optim.lr_scheduler.StepLR(self.policy_opt,step_size=1, gamma=decay_rate)
         self.scheduler_critic = torch.optim.lr_scheduler.StepLR(self.twin_q_opt,step_size=1, gamma=decay_rate)
         self.scheduler_sa_classifier_opt = torch.optim.lr_scheduler.StepLR(self.sa_classifier_opt,step_size=1, gamma=decay_rate)
@@ -80,6 +86,7 @@ class DARC(SAC):
         s_sas_inputs = torch.cat([s_states, s_actions, s_next_states], 1)
         t_sa_inputs = torch.cat([t_states, t_actions], 1)
         t_sas_inputs = torch.cat([t_states, t_actions, t_next_states], 1)
+        
         s_sa_logits = self.sa_classifier(s_sa_inputs + gen_noise(self.noise_scale, s_sa_inputs, self.device))
         s_sas_logits = self.sas_adv_classifier(s_sas_inputs + gen_noise(self.noise_scale, s_sas_inputs, self.device))
         t_sa_logits = self.sa_classifier(t_sa_inputs + gen_noise(self.noise_scale, t_sa_inputs, self.device))

@@ -102,22 +102,36 @@ class Discriminator:
 # DARC classifier
 ## SA classifier: linear[s+a, 64], relu, linear[64, 2]
 ## SAS classifier: linear[s+s+a', 64], relu, linear[64, 2]
-class Classifier(nn.Module):
-    def __init__(self, state_dim, hidden_dim, hidden_layer_num=2) -> None:
-        super(Classifier, self).__init__()
+class SA_Classifier(nn.Module):
+    def __init__(self, state_dim, action_dim, hidden_dim, hidden_layer_num=2) -> None:
+        super(SA_Classifier, self).__init__()
         self.hidden_layer_num = hidden_layer_num
-        self.state_layer = nn.Linear(state_dim, hidden_dim)
+        self.state_layer = nn.Linear(state_dim + action_dim, hidden_dim)
         for i in range(hidden_layer_num):
             setattr(self, 'hidden_layer{}'.format(i+1), nn.Linear(hidden_dim, hidden_dim))
         self.action_layer = nn.Linear(hidden_dim, 2)
         self.apply(weight_init)
 
-    def forward(self, s1, a, s2=None):
-        if s2 is None:
-            x = torch.cat([s1, a], dim=1)
-        else:
-            x = torch.cat([s1, s2, a], dim=1)
+    def forward(self, x):     
+        x = F.relu(self.state_layer_1(x))
+        for i in range(self.hidden_layer_num):
+            x = F.relu(getattr(self, 'hidden_layer_1{}'.format(i+1))(x))
+        x = self.action_layer(x)
         
+        return x
+    
+       
+class SAS_Classifier(nn.Module):
+    def __init__(self, state_dim, action_dim, hidden_dim, hidden_layer_num=2) -> None:
+        super(SAS_Classifier, self).__init__()
+        self.hidden_layer_num = hidden_layer_num
+        self.state_layer = nn.Linear(2 * state_dim + action_dim, hidden_dim)
+        for i in range(hidden_layer_num):
+            setattr(self, 'hidden_layer{}'.format(i+1), nn.Linear(hidden_dim, hidden_dim))
+        self.action_layer = nn.Linear(hidden_dim, 2)
+        self.apply(weight_init)
+
+    def forward(self, x):     
         x = F.relu(self.state_layer_1(x))
         for i in range(self.hidden_layer_num):
             x = F.relu(getattr(self, 'hidden_layer_1{}'.format(i+1))(x))

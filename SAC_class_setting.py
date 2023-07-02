@@ -1,3 +1,4 @@
+import os
 from tqdm import tqdm
 import numpy as np
 import torch
@@ -8,20 +9,33 @@ import gymnasium as gym
 import matplotlib.pyplot as plt
 import replay_buffer as rb
 from model import *
+from util import *
 
-class SACContinuous:
-    def __init__(self, replay_buffer, state_dim, hidden_dim, action_dim, hidden_laryer_num, action_space,
-                 actor_lr, critic_lr, alpha_lr, tau, gamma, device) -> None:
+class SACContinuous:   
+    def __init__(self, replay_buffer, batch_size, buffer_size, env, hidden_dim, hidden_layer_num, actor_lr, critic_lr, alpha_lr, tau, gamma, device,
+                 scheduler_open=False, scheduler_size=10000, scheduler_gamma=0.9, log_dir='SAC', min_num=1000, num_episodes=1000):
         
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        self.action_range = [action_space.low, action_space.high]
+        path = 'logs/' + log_dir
+        if not os.path.exists(path):
+            os.makedirs(path)
+        self.writer = TensorWriter(path)
         
-        self.replay_buffer = replay_buffer
+        self.min_num = min_num
+        self.num_steps = num_episodes
+
+        self.state_dim = env.observation_space.shape[0]
+        self.action_dim = env.action_space.shape[0]
+        self.action_range = [env.action_space.low, env.action_space.high]
         
-        self.actor = continuousPolicyNet(state_dim, hidden_dim, action_dim, hidden_laryer_num).to(device)
-        self.critic = continuousTwinValueNet(state_dim, hidden_dim, action_dim, hidden_laryer_num).to(device)
-        self.target_critic = continuousTwinValueNet(state_dim, hidden_dim, action_dim, hidden_laryer_num).to(device)
+        if replay_buffer == 'ReplayBuffer':
+            self.replay_buffer = rb.ReplayBuffer(self.state_dim, self.action_dim, buffer_size, device)
+        elif replay_buffer == 'PrioritizedReplayBuffer':
+            self.replay_buffer = rb.PrioritizedReplayBuffer(self.state_dim, self.action_dim, buffer_size, device, eps=1e-7, alpha=0.1, beta=0.1)
+        self.batch_size = batch_size
+        
+        self.actor = continuousPolicyNet(self.state_dim, hidden_dim, self.action_dim, hidden_layer_num).to(device)
+        self.critic = continuousTwinValueNet(self.state_dim, hidden_dim, self.action_dim, hidden_layer_num).to(device)
+        self.target_critic = continuousTwinValueNet(self.state_dim, hidden_dim, self.action_dim, hidden_layer_num).to(device)
         
         
         # initialize the target net as the same as the original value net
@@ -30,18 +44,18 @@ class SACContinuous:
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
         
-        # no scheduler perfomes better
-        #self.actor_scheduler = torch.optim.lr_scheduler.StepLR(self.actor_optimizer, step_size=10000, gamma=0.9)
-        #self.critic_scheduler = torch.optim.lr_scheduler.StepLR(self.critic_optimizer, step_size=10000, gamma=0.9)
+        self.actor_scheduler = torch.optim.lr_scheduler.StepLR(self.actor_optimizer, step_size=scheduler_size, gamma=scheduler_gamma)
+        self.critic_scheduler = torch.optim.lr_scheduler.StepLR(self.critic_optimizer, step_size=scheduler_size, gamma=scheduler_gamma)
 
         # using log alpha to stablize the training process
         self.log_alpha = torch.tensor(np.log(0.01), dtype=torch.float)
         self.log_alpha.requires_grad = True
         self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_lr)
         
-        #self.log_alpha_scheduler = torch.optim.lr_scheduler.StepLR(self.log_alpha_optimizer, step_size=10000, gamma=0.9)
+        self.log_alpha_scheduler = torch.optim.lr_scheduler.StepLR(self.log_alpha_optimizer, step_size=scheduler_size, gamma=scheduler_gamma)
+        self.scheduler_open = scheduler_open
         
-        self.target_entropy = -torch.prod(torch.Tensor(action_space.shape).to(device)).item()
+        self.target_entropy = -torch.prod(torch.Tensor(env.action_space.shape).to(device)).item()
         self.tau = tau
         self.gamma = gamma
         self.device = device
@@ -73,6 +87,12 @@ class SACContinuous:
     def weighted_mse_loss(self, input, target, weight):
         weight = weight.to(self.device)
         return torch.mean(weight * (input - target) ** 2)
+    
+    def scheduler_step(self):
+        self.critic_scheduler.step()
+        self.actor_scheduler.step()
+        self.log_alpha_scheduler.step()
+        
             
     def update(self, batch_size):
         if isinstance(self.replay_buffer, rb.ReplayBuffer):
@@ -107,8 +127,6 @@ class SACContinuous:
         critic2_loss.backward()
         self.critic_optimizer.step()
         
-        #self.critic_scheduler.step()
-        
         # update the actor
         new_actions, log_prob, _ = self.actor(states)
         q1, q2 = self.critic(states, new_actions)
@@ -117,15 +135,49 @@ class SACContinuous:
         actor_loss.backward()
         self.actor_optimizer.step()
         
-        #self.actor_scheduler.step()
-        
         # update the alpha
         alpha_loss = -torch.mean((log_prob + self.target_entropy).detach() * self.log_alpha.exp())
         self.log_alpha_optimizer.zero_grad()
         alpha_loss.backward()
         self.log_alpha_optimizer.step()
         
-        #self.log_alpha_scheduler.step()
+        if self.scheduler_open:
+            self.scheduler_step()
         
+        self.soft_update(self.critic, self.target_critic)
+        
+    '''def train_SAC(self):
+        self.actor.train()
+        self.critic.train()
+        
+        for i in range(self.num_steps):
+            total_reward = 0
+            done, truncated = False, False
+            state, _ = self.env.reset()
+            while not (done or truncated):
+                action = self.take_action(state)
+                next_state, reward, done, truncated, _ = self.env.step(action)
+                self.replay_buffer.add((state, action, reward, next_state, done, truncated))
+                state = next_state
+                total_reward += reward
+                
+                if self.replay_buffer.real_size > self.min_num:
+                    self.update(self.batch_size)'''
+                    
+                
+        
+        
+    def save_model(self, folder):
+        path = 'saved_model/SAC/' + folder
+        if not os.path.exists(path):
+            os.makedirs(path)
+        
+        torch.save(self.actor.state_dict(), path + '/actor')
+        torch.save(self.critic.state_dict(), path + '/critic')
+        
+    def load_model(self, folder, device):
+        path = 'saved_model/SAC/' + folder
+        self.actor.load_state_dict(torch.load(path + '/actor', map_location=device))
+        self.critic.load_state_dict(torch.load(path + '/critic', map_location=device))
         self.soft_update(self.critic, self.target_critic)
         
