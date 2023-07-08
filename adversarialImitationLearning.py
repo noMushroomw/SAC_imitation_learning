@@ -7,13 +7,10 @@ from torch.nn import functional
 from torch.optim import Adam
 import math
 
-from architectures.gaussian_policy import ContGaussianPolicy
-from architectures.utils import gen_noise
-from architectures.value_networks import ContTwinQNet
-from architectures.utils import polyak_update
+from model import continuousPolicyNet, continuousTwinValueNet, Discriminator
+from util import gen_noise, TensorWriter
 from replay_buffer import ReplayBuffer
-from tensor_writer import TensorWriter
-from models.mlp_discriminator import Discriminator
+
 
 dtype = torch.float32
 
@@ -40,7 +37,7 @@ class GailContSAC_SRC:
         self.env = env
         self.target_env = target_env
         self.action_range = (env.action_space.low, env.action_space.high)
-        self.policy = ContGaussianPolicy(policy_config, self.action_range).to(self.device)
+        self.policy = continuousPolicyNet(policy_config, self.action_range).to(self.device)
         self.policy_opt = Adam(self.policy.parameters(), lr=lr)
         self.running_mean = running_mean
 

@@ -146,6 +146,10 @@ class SACContinuous:
         
         self.soft_update(self.critic, self.target_critic)
         
+        return {'Actor loss': actor_loss.item(),
+                'Critic1 loss': critic1_loss.item(),
+            }
+        
     '''def train_SAC(self):
         self.actor.train()
         self.critic.train()

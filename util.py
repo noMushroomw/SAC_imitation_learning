@@ -47,29 +47,61 @@ def train_on_policy_agent(env, agent, num_episodes):
 # train off policy agent (sac e.g.)
 def train_off_policy_agent(env, agent, num_episodes, minimal_size, batch_size):
     return_list = []
+    running_mean = ZFilter(env.observation_space.shape[0], clip=5)
     for i in range(10):
         with tqdm(total=int(num_episodes/10), desc='Iteration %d' % i) as pbar:
             for i_episode in range(int(num_episodes/10)):
                 episode_return = 0
                 state, _ = env.reset()
+                state = running_mean(state)
                 done = False
                 truncated = False
                 while not (done or truncated):
                     action = agent.take_action(state)
                     next_state, reward, done, truncated, _ = env.step(action)
+                    next_state = running_mean(next_state)
                     agent.replay_buffer.add((state, action, reward, next_state, done, truncated))
                     state = next_state
                     episode_return += reward
                     if agent.replay_buffer.real_size > minimal_size:
-                        agent.update(batch_size)
+                        train_info = agent.update(batch_size)
                 return_list.append(episode_return)
                 if (i_episode+1) % 10 == 0:
                     pbar.set_postfix({'episode': '%d' % (num_episodes/10 * i + i_episode+1), 'return': '%.3f' % np.mean(return_list[-10:])})
                 pbar.update(1)
+        print(train_info)
     return return_list
 
-def train_darc():
-    pass
+def train_darc(agent, num_games, deterministic=False):
+        agent.actor.train()
+        agent.critic.train()
+        agent.sa_classifier.train()
+        agent.sas_adv_classifier.train()
+        for i in range(num_games):
+            source_reward, source_step = agent.simulate_env(i, "source", deterministic)
+
+            if i < agent.warmup_games or i % agent.s_t_ratio == 0:
+                target_reward, target_step = agent.simulate_env(i, "target", deterministic)
+                agent.writer.add_scalar('Target Env/Rewards', target_reward, i)
+                agent.writer.add_scalar('Target Env/N_Steps', target_step, i)
+                print("TARGET: index: {}, steps: {}, total_rewards: {}".format(i, target_step, target_reward))
+
+            if i >= agent.warmup_games:
+                agent.writer.add_scalar('Source Env/Rewards', source_reward, i)
+                agent.writer.add_scalar('Source Env/N_Steps', source_step, i)
+                if i % agent.n_games_til_train == 0:
+                    for _ in range(source_step):
+                        #agent.total_train_steps += 1
+                        train_info = agent.update(i)
+                        agent.writer.add_train_step_info(train_info, i)
+                    agent.writer.write_train_step()
+                if i %100 == 0:
+                    print('src',agent.eval_src(10))
+                    print('tgt',agent.eval_tgt(10))
+                    agent.save_model(str(i))
+
+            print("SOURCE: index: {}, steps: {}, total_rewards: {}".format(i, source_step, source_reward))
+
 
 # sample expert data
 def sample_expert_data(env, agent, num_episodes, threshold):

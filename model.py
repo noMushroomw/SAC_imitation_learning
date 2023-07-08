@@ -113,9 +113,9 @@ class SA_Classifier(nn.Module):
         self.apply(weight_init)
 
     def forward(self, x):     
-        x = F.relu(self.state_layer_1(x))
+        x = F.relu(self.state_layer(x))
         for i in range(self.hidden_layer_num):
-            x = F.relu(getattr(self, 'hidden_layer_1{}'.format(i+1))(x))
+            x = F.relu(getattr(self, 'hidden_layer{}'.format(i+1))(x))
         x = self.action_layer(x)
         
         return x
@@ -132,9 +132,9 @@ class SAS_Classifier(nn.Module):
         self.apply(weight_init)
 
     def forward(self, x):     
-        x = F.relu(self.state_layer_1(x))
+        x = F.relu(self.state_layer(x))
         for i in range(self.hidden_layer_num):
-            x = F.relu(getattr(self, 'hidden_layer_1{}'.format(i+1))(x))
+            x = F.relu(getattr(self, 'hidden_layer{}'.format(i+1))(x))
         x = self.action_layer(x)
         
         return x
