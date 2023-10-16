@@ -1,4 +1,4 @@
-import gymnasium as gym
+import gym
 import numpy as np
 
 
@@ -47,3 +47,9 @@ class BrokenJointEnv2(gym.Wrapper):
                 if action[broken_joint] < -0.1:
                     action[broken_joint] = -0.1
         return super(BrokenJointEnv2, self).step(action)
+
+
+class Obstacle_env(gym.Wrapper):
+    def __init__(self, env):
+        super(Obstacle_env, self).__init__(env)
+        
